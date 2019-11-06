@@ -32,24 +32,6 @@ func main() {
 		}
 		return nil
 	}
-	app.Action = func(clix *cli.Context) error {
-		data, err := zfs.GetDataset("tank")
-		if err != nil {
-			return err
-		}
-		sets, err := data.Children(0)
-		if err != nil {
-			return err
-		}
-		for _, d := range sets {
-			// filter out snapshots for now
-			if d.Type == TypeSnapshot {
-				continue
-			}
-			fmt.Println(d.Name)
-		}
-		return nil
-	}
 	if err := app.Run(os.Args); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
