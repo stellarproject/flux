@@ -13,9 +13,9 @@ import (
 
 func main() {
 	app := cli.NewApp()
-	app.Name = "zfsback"
+	app.Name = "flux"
 	app.Version = "1"
-	app.Usage = "ZFS's has your back"
+	app.Usage = "going back in time with zfs"
 	app.Flags = []cli.Flag{
 		cli.BoolFlag{
 			Name:  "debug",
