@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -57,6 +58,10 @@ var purgeCommand = cli.Command{
 			Usage: "purge snapshots older than",
 			Value: 2 * Week,
 		},
+		cli.BoolFlag{
+			Name:  "dry",
+			Usage: "display don't delete",
+		},
 	},
 	Action: func(clix *cli.Context) error {
 		mark := time.Now().Add(-clix.Duration("older-than"))
@@ -72,18 +77,36 @@ var purgeCommand = cli.Command{
 			if d.Type != TypeSnapshot {
 				continue
 			}
-			created, _, err := getCreatedTime(d)
+			created, err := getCreationTime(d)
 			if err != nil {
+				logrus.WithError(err).Error("get creation time")
 				continue
 			}
 			if created.Before(mark) {
-				if err := d.Destroy(zfs.DestroyDefault); err != nil {
-					return err
+				logrus.Debugf("destory %s", d.Name)
+				if !clix.Bool("dry") {
+					if err := d.Destroy(zfs.DestroyDefault); err != nil {
+						logrus.WithError(err).Error("unable destroy")
+					}
 				}
 			}
 		}
 		return nil
 	},
+}
+
+const creationProp = "creation"
+
+func getCreationTime(d *zfs.Dataset) (time.Time, error) {
+	p, err := d.GetProperty(creationProp)
+	if err != nil {
+		return time.Time{}, err
+	}
+	v, err := strconv.Atoi(p)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return time.Unix(int64(v), 0), nil
 }
 
 var snapshotCommand = cli.Command{
@@ -106,6 +129,10 @@ var snapshotCommand = cli.Command{
 			Name:  "gid",
 			Usage: "ssh group",
 		},
+		cli.BoolFlag{
+			Name:  "init",
+			Usage: "send the inital snapshot",
+		},
 	},
 	Action: func(clix *cli.Context) error {
 		var (
@@ -113,6 +140,7 @@ var snapshotCommand = cli.Command{
 			names  = clix.Args()
 			target = clix.String("send")
 			dest   = clix.String("dest")
+			initS  = clix.Bool("init")
 		)
 		for _, name := range names {
 			set, err := zfs.GetDataset(name)
@@ -124,6 +152,9 @@ var snapshotCommand = cli.Command{
 				return err
 			}
 			prev := snapshots[len(snapshots)-1]
+			if initS {
+				prev = nil
+			}
 
 			snapshot, err := set.Snapshot(now.Format(time.RFC3339), false)
 			if err != nil {
@@ -162,6 +193,12 @@ func send(target, dest string, uid, gid uint32, set *zfs.Dataset, prev *ExtDatas
 	if err := ssh.Start(); err != nil {
 		return err
 	}
+	if prev == nil {
+		if err := set.SendSnapshot(in); err != nil {
+			return err
+		}
+		return ssh.Wait()
+	}
 	if err := set.IncrementalSend(prev.Dataset, in); err != nil {
 		return err
 	}
@@ -186,13 +223,13 @@ func getSnapshots(set *zfs.Dataset) ([]*ExtDataset, error) {
 	var out []*ExtDataset
 	for _, s := range sets {
 		if s.Type == TypeSnapshot {
-			created, name, err := getCreatedTime(s)
+			created, err := getCreationTime(s)
 			if err != nil {
 				continue
 			}
 			out = append(out, &ExtDataset{
 				Dataset:  s,
-				BaseName: name,
+				BaseName: strings.Split(s.Name, "@")[0],
 				Created:  created,
 			})
 		}
@@ -202,15 +239,6 @@ func getSnapshots(set *zfs.Dataset) ([]*ExtDataset, error) {
 }
 
 var errNoTime = errors.New("no time specified")
-
-func getCreatedTime(set *zfs.Dataset) (time.Time, string, error) {
-	parts := strings.SplitN(set.Name, "@", 2)
-	created, err := time.Parse(time.RFC3339, parts[1])
-	if err != nil {
-		return time.Time{}, "", errNoTime
-	}
-	return created, parts[0], nil
-}
 
 type byCreated []*ExtDataset
 
